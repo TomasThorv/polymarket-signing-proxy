@@ -1,9 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import MarketOrderArgs, LimitOrderArgs
+from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
+from py_clob_client.order_builder.constants import BUY, SELL
 import os
-import json
 
 app = FastAPI(title="Polymarket Signing Proxy")
 
@@ -26,7 +26,7 @@ def get_client():
         host="https://clob.polymarket.com",
         key=PRIVATE_KEY,
         chain_id=137,
-        signature_type=1,  # POLY_PROXY for Magic wallet
+        signature_type=1,
         funder=FUNDER,
     )
     client.set_api_creds(creds)
@@ -34,23 +34,18 @@ def get_client():
 
 
 class TradeRequest(BaseModel):
-    secret: str  # Simple auth to prevent unauthorized access
-    token_id: str  # The CLOB token ID for Yes or No outcome
+    secret: str
+    token_id: str
     side: str  # "BUY" or "SELL"
-    size: float  # Amount in USDC
+    size: float  # Number of shares
     price: float  # Limit price (0.01 to 0.99)
 
 
-class MarketBuyRequest(BaseModel):
+class MarketTradeRequest(BaseModel):
     secret: str
     token_id: str
-    amount: float  # USDC amount to spend
-
-
-class MarketSellRequest(BaseModel):
-    secret: str
-    token_id: str
-    amount: float  # Number of shares to sell
+    side: str  # "BUY" or "SELL"
+    amount: float  # USDC for buys, shares for sells
 
 
 @app.get("/health")
@@ -65,21 +60,21 @@ def place_limit_order(req: TradeRequest):
 
     try:
         client = get_client()
-        order_args = LimitOrderArgs(
+        side = BUY if req.side.upper() == "BUY" else SELL
+
+        order_args = OrderArgs(
             token_id=req.token_id,
             price=req.price,
             size=req.size,
-            side=req.side,
+            side=side,
         )
 
-        if req.side.upper() == "BUY":
-            signed_order = client.create_and_post_order(order_args)
-        else:
-            signed_order = client.create_and_post_order(order_args)
+        signed_order = client.create_order(order_args)
+        response = client.post_order(signed_order, OrderType.GTC)
 
         return {
             "success": True,
-            "order": str(signed_order),
+            "response": response,
             "details": {
                 "token_id": req.token_id,
                 "side": req.side,
@@ -100,29 +95,48 @@ def place_limit_order(req: TradeRequest):
         }
 
 
-@app.post("/market-buy")
-def market_buy(req: MarketBuyRequest):
+@app.post("/market-trade")
+def market_trade(req: MarketTradeRequest):
     if req.secret != PROXY_SECRET:
         raise HTTPException(status_code=401, detail="Invalid secret")
 
     try:
         client = get_client()
+        side = BUY if req.side.upper() == "BUY" else SELL
+
         order_args = MarketOrderArgs(
             token_id=req.token_id,
             amount=req.amount,
+            side=side,
         )
-        result = client.create_market_order(order_args)
-        return {"success": True, "order": str(result)}
+
+        signed_order = client.create_market_order(order_args)
+        response = client.post_order(signed_order, OrderType.FOK)
+
+        return {
+            "success": True,
+            "response": response,
+            "details": {
+                "token_id": req.token_id,
+                "side": req.side,
+                "amount": req.amount,
+            }
+        }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": str(e),
+            "details": {
+                "token_id": req.token_id,
+                "side": req.side,
+                "amount": req.amount,
+            }
+        }
 
 
 @app.get("/balance")
 def get_balance():
-    """Get USDC balance (no auth needed - read only)"""
     try:
-        client = get_client()
-        # Use the data API for balance
         import httpx
         resp = httpx.get(f"https://data-api.polymarket.com/value?user={FUNDER}")
         return {"balance": resp.json()}
