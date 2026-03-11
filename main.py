@@ -134,6 +134,25 @@ def market_trade(req: MarketTradeRequest):
         }
 
 
+class ApproveRequest(BaseModel):
+    secret: str
+
+
+@app.post("/approve")
+def approve_allowance(req: ApproveRequest):
+    """Set max USDC allowance for Polymarket's CTF Exchange contract."""
+    if req.secret != PROXY_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid secret")
+
+    try:
+        client = get_client()
+        # py_clob_client has built-in methods to set allowances
+        client.set_allowances()
+        return {"success": True, "message": "Allowances set successfully"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/balance")
 def get_balance():
     try:
