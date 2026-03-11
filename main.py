@@ -147,7 +147,7 @@ def approve_allowance(req: ApproveRequest):
     try:
         from web3 import Web3
 
-        rpc = "https://polygon-rpc.com"
+        rpc = "https://polygon.llamarpc.com"
         w3 = Web3(Web3.HTTPProvider(rpc))
         account = w3.eth.account.from_key(PRIVATE_KEY)
         max_approval = 2**256 - 1
