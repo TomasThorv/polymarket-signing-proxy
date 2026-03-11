@@ -140,15 +140,50 @@ class ApproveRequest(BaseModel):
 
 @app.post("/approve")
 def approve_allowance(req: ApproveRequest):
-    """Set max USDC allowance for Polymarket's CTF Exchange contract."""
+    """Set max USDC and conditional token allowances for Polymarket exchange contracts."""
     if req.secret != PROXY_SECRET:
         raise HTTPException(status_code=401, detail="Invalid secret")
 
     try:
-        client = get_client()
-        # py_clob_client has built-in methods to set allowances
-        client.set_allowances()
-        return {"success": True, "message": "Allowances set successfully"}
+        from web3 import Web3
+
+        rpc = "https://polygon-rpc.com"
+        w3 = Web3(Web3.HTTPProvider(rpc))
+        account = w3.eth.account.from_key(PRIVATE_KEY)
+        max_approval = 2**256 - 1
+
+        # ERC20 approve ABI
+        approve_abi = [{"inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"}]
+
+        usdc = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+        ctf = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+        spenders = [
+            "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",  # CTF Exchange
+            "0xC5d563A36AE78145C45a50134d48A1215220f80a",  # Neg Risk CTF Exchange
+            "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",  # Neg Risk Adapter
+        ]
+
+        results = []
+        nonce = w3.eth.get_transaction_count(account.address)
+
+        for token_addr in [usdc, ctf]:
+            contract = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=approve_abi)
+            for spender in spenders:
+                tx = contract.functions.approve(
+                    Web3.to_checksum_address(spender), max_approval
+                ).build_transaction({
+                    "from": account.address,
+                    "nonce": nonce,
+                    "gas": 60000,
+                    "gasPrice": w3.to_wei(50, "gwei"),
+                    "chainId": 137,
+                })
+                signed = account.sign_transaction(tx)
+                tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+                results.append({"token": token_addr, "spender": spender, "tx": tx_hash.hex()})
+                nonce += 1
+
+        return {"success": True, "approvals": results}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
